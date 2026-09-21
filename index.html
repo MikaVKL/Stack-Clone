@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Stack Clone</title>
+<style>
+  /* Grundlegendes Reset, damit kein Rand/Scroll stört */
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #1b1b2f;
+    touch-action: manipulation; /* verhindert Doppel-Tap-Zoom auf iPad */
+  }
+
+  /* Der Canvas füllt den gesamten sichtbaren Bereich aus.
+     Wir nutzen Flexbox, damit das Spielfeld immer zentriert bleibt. */
+  #spielContainer {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+
+  #spielCanvas {
+    display: block;
+    background: #1b1b2f;
+    /* Der große Tap-Bereich ist einfach der ganze Canvas */
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Punkteanzeige oben */
+  #punkteAnzeige {
+    position: absolute;
+    top: env(safe-area-inset-top, 0px);
+    left: 0;
+    width: 100%;
+    text-align: center;
+    padding-top: 20px;
+    font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;
+    color: #ffffff;
+    pointer-events: none; /* Klicks sollen durch die Anzeige hindurch zum Canvas gehen */
+    z-index: 5;
+  }
+
+  #aktuellePunkte {
+    font-size: 48px;
+    font-weight: 700;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.3);
+  }
+
+  #highscoreText {
+    font-size: 16px;
+    opacity: 0.8;
+    margin-top: 4px;
+  }
+
+  /* Startbildschirm / Overlay */
+  #overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(27, 27, 47, 0.85);
+    color: #fff;
+    font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;
+    text-align: center;
+    z-index: 10;
+    padding: 20px;
+  }
+
+  #overlay h1 {
+    font-size: 36px;
+    margin-bottom: 10px;
+  }
+
+  #overlay p {
+    font-size: 18px;
+    opacity: 0.85;
+    margin-bottom: 30px;
+  }
+
+  #overlay .hinweis {
+    font-size: 14px;
+    opacity: 0.6;
+    margin-top: 20px;
+  }
+
+  #spielEndPunkte {
+    font-size: 22px;
+    margin-bottom: 6px;
+  }
+
+  .versteckt {
+    display: none !important;
+  }
+</style>
+</head>
+<body>
+
+<div id="spielContainer">
+  <canvas id="spielCanvas"></canvas>
+
+  <!-- Live-Punkteanzeige während des Spiels -->
+  <div id="punkteAnzeige">
+    <div id="aktuellePunkte">0</div>
+    <div id="highscoreText">Highscore: 0</div>
+  </div>
+
+  <!-- Start- und Game-Over-Bildschirm -->
+  <div id="overlay">
+    <h1 id="overlayTitel">Stack</h1>
+    <p id="overlayText">Tippe, um den Turm zu bauen!</p>
+    <div id="spielEndBereich" class="versteckt">
+      <div id="spielEndPunkte">Punkte: 0</div>
+      <div id="spielEndHighscore">Highscore: 0</div>
+    </div>
+    <div class="hinweis">Tippen oder Klicken zum Starten</div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   STACK CLONE - Ein einfacher Klon des bekannten "Stack"-Spiels
+   ============================================================
+   Aufbau des Codes:
+   1. Canvas & Grundeinstellungen
+   2. Spielzustand (Variablen, die den aktuellen Zustand beschreiben)
+   3. Hilfsfunktionen (Größe anpassen, Farben, Highscore)
+   4. Spiellogik (neuer Block, Bewegung, Abschneiden, Game Over)
+   5. Zeichnen (alles was auf dem Bildschirm sichtbar ist)
+   6. Game Loop (die Schleife, die alles am Laufen hält)
+   7. Eingabe-Handling (Klick/Touch)
+   ============================================================ */
+
+// ---------- 1. Canvas & Grundeinstellungen ----------
+
+const canvas = document.getElementById('spielCanvas');
+const ctx = canvas.getContext('2d');
+
+const punkteAnzeigeElement = document.getElementById('aktuellePunkte');
+const highscoreTextElement = document.getElementById('highscoreText');
+const overlayElement = document.getElementById('overlay');
+const overlayTitelElement = document.getElementById('overlayTitel');
+const overlayTextElement = document.getElementById('overlayText');
+const spielEndBereichElement = document.getElementById('spielEndBereich');
+const spielEndPunkteElement = document.getElementById('spielEndPunkte');
+const spielEndHighscoreElement = document.getElementById('spielEndHighscore');
+
+// Canvas an die tatsächliche Bildschirmgröße anpassen (inkl. Retina-Displays)
+let breiteCanvas = 0;
+let hoeheCanvas = 0;
+let pixelVerhaeltnis = window.devicePixelRatio || 1;
+
+function canvasGroesseAnpassen() {
+  breiteCanvas = window.innerWidth;
+  hoeheCanvas = window.innerHeight;
+
+  canvas.width = breiteCanvas * pixelVerhaeltnis;
+  canvas.height = hoeheCanvas * pixelVerhaeltnis;
+  canvas.style.width = breiteCanvas + 'px';
+  canvas.style.height = hoeheCanvas + 'px';
+
+  // Damit wir in "normalen" Pixeln zeichnen können, skalieren wir den Kontext
+  ctx.setTransform(pixelVerhaeltnis, 0, 0, pixelVerhaeltnis, 0, 0);
+}
+
+window.addEventListener('resize', canvasGroesseAnpassen);
+window.addEventListener('orientationchange', () => {
+  // Kurze Verzögerung, da iPad die neue Größe nicht sofort meldet
+  setTimeout(canvasGroesseAnpassen, 100);
+});
+canvasGroesseAnpassen();
+
+
+// ---------- 2. Spielzustand ----------
+
+// Jeder Block hat: x (linke Kante), breite, y (Höhe in der Welt), farbe
+// Die Welt wächst nach "oben" (kleinere y-Werte), die Kamera folgt mit.
+
+const BLOCK_HOEHE = 40;          // Höhe jedes Blocks in Pixel
+const START_BREITE = 240;        // Breite des allerersten (Basis-)Blocks
+const PERFEKT_TOLERANZ = 6;      // Wie viele Pixel Abweichung noch als "perfekt" zählt
+
+let turm = [];            // Liste aller bereits platzierten Blöcke (unten nach oben)
+let aktuellerBlock = null; // Der Block, der sich gerade bewegt
+let kameraY = 0;           // Verschiebung der "Kamera" nach oben, wächst mit dem Turm
+let punkte = 0;
+let highscore = 0;
+let spielLaeuft = false;
+let spielGestartet = false;
+
+// Geschwindigkeit des sich bewegenden Blocks (Pixel pro Sekunde)
+let basisGeschwindigkeit = 200;
+
+// Farbverlauf: wir wechseln die Blockfarbe langsam mit der Höhe,
+// das sieht ähnlich aus wie im Original.
+function farbeFuerHoehe(index) {
+  const farbtonStart = 190; // Start-Farbton (Blau/Türkis-Bereich, HSL)
+  const farbtonSchritt = 4;
+  const farbton = (farbtonStart + index * farbtonSchritt) % 360;
+  return `hsl(${farbton}, 65%, 55%)`;
+}
+
+
+// ---------- 3. Hilfsfunktionen ----------
+
+function highscoreLaden() {
+  const gespeichert = localStorage.getItem('stackCloneHighscore');
+  highscore = gespeichert ? parseInt(gespeichert, 10) : 0;
+  if (isNaN(highscore)) highscore = 0;
+}
+
+function highscoreSpeichern() {
+  // Nur speichern, wenn ein neuer Highscore erreicht wurde
+  if (punkte > highscore) {
+    highscore = punkte;
+    localStorage.setItem('stackCloneHighscore', String(highscore));
+  }
+}
+
+function punkteAnzeigeAktualisieren() {
+  punkteAnzeigeElement.textContent = String(punkte);
+  highscoreTextElement.textContent = 'Highscore: ' + String(highscore);
+}
+
+
+// ---------- 4. Spiellogik ----------
+
+function spielInitialisieren() {
+  turm = [];
+  punkte = 0;
+  kameraY = 0;
+  basisGeschwindigkeit = 200;
+
+  // Basis-Block in der Mitte des Bildschirms platzieren
+  const basisX = (breiteCanvas - START_BREITE) / 2;
+  turm.push({
+    x: basisX,
+    breite: START_BREITE,
+    y: 0,
+    farbe: farbeFuerHoehe(0)
+  });
+
+  neuenBlockErzeugen();
+  punkteAnzeigeAktualisieren();
+}
+
+// Erzeugt den nächsten beweglichen Block über dem obersten Turm-Block
+function neuenBlockErzeugen() {
+  const oberster = turm[turm.length - 1];
+  const neueY = oberster.y - BLOCK_HOEHE;
+
+  // Geschwindigkeit steigt langsam mit der Anzahl der Blöcke (= Höhe des Turms)
+  const geschwindigkeit = basisGeschwindigkeit + turm.length * 4;
+
+  // Startrichtung wechselt zufällig, Startposition an einem Rand
+  const vonLinks = Math.random() < 0.5;
+  const startX = vonLinks ? -oberster.breite : breiteCanvas;
+
+  aktuellerBlock = {
+    x: startX,
+    breite: oberster.breite,
+    y: neueY,
+    farbe: farbeFuerHoehe(turm.length),
+    richtung: vonLinks ? 1 : -1,
+    geschwindigkeit: geschwindigkeit
+  };
+}
+
+// Bewegt den aktuellen Block horizontal hin und her
+function blockBewegen(deltaZeit) {
+  if (!aktuellerBlock) return;
+
+  aktuellerBlock.x += aktuellerBlock.richtung * aktuellerBlock.geschwindigkeit * deltaZeit;
+
+  // Am linken/rechten Rand die Richtung umkehren
+  if (aktuellerBlock.x <= -aktuellerBlock.breite) {
+    aktuellerBlock.x = -aktuellerBlock.breite;
+    aktuellerBlock.richtung = 1;
+  } else if (aktuellerBlock.x >= breiteCanvas) {
+    aktuellerBlock.x = breiteCanvas;
+    aktuellerBlock.richtung = -1;
+  }
+}
+
+// Wird aufgerufen, wenn der Spieler tippt/klickt: Block "fallen lassen"
+function blockAblegen() {
+  if (!spielLaeuft || !aktuellerBlock) return;
+
+  const unterster = turm[turm.length - 1];
+  const aktuell = aktuellerBlock;
+
+  // Überlappung zwischen dem neuen Block und dem darunterliegenden Block berechnen.
+  // Das ist die Kernlogik des Spiels: der "linke" gemeinsame Rand ist das Maximum
+  // der beiden linken Kanten, der "rechte" gemeinsame Rand das Minimum der beiden
+  // rechten Kanten. Die Differenz ist die neue (abgeschnittene) Blockbreite.
+  const linkesEnde = Math.max(unterster.x, aktuell.x);
+  const rechtesEnde = Math.min(unterster.x + unterster.breite, aktuell.x + aktuell.breite);
+  const ueberlappBreite = rechtesEnde - linkesEnde;
+
+  // Kein Überlapp mehr -> komplett daneben -> Game Over
+  if (ueberlappBreite <= 0) {
+    spielBeenden();
+    return;
+  }
+
+  // Prüfen, ob der Treffer "perfekt" war (kaum Abweichung zur Blockposition darunter)
+  const abweichung = Math.abs(aktuell.x - unterster.x);
+  const istPerfekt = abweichung <= PERFEKT_TOLERANZ;
+
+  let neuerBlock;
+  if (istPerfekt) {
+    // Bonus: Block bleibt in voller Breite erhalten und wird exakt ausgerichtet
+    neuerBlock = {
+      x: unterster.x,
+      breite: unterster.breite,
+      y: aktuell.y,
+      farbe: aktuell.farbe
+    };
+    punkte += 2; // Extra-Punkte für perfekten Treffer
+  } else {
+    // Normalfall: Block wird auf die Überlappung zugeschnitten
+    neuerBlock = {
+      x: linkesEnde,
+      breite: ueberlappBreite,
+      y: aktuell.y,
+      farbe: aktuell.farbe
+    };
+    punkte += 1;
+  }
+
+  turm.push(neuerBlock);
+  punkteAnzeigeAktualisieren();
+
+  // Wenn der Turm zu schmal geworden ist, ist das Spiel auch vorbei
+  if (neuerBlock.breite <= 1) {
+    spielBeenden();
+    return;
+  }
+
+  // Kamera nach oben verschieben, damit der Turm immer sichtbar bleibt
+  kameraY += BLOCK_HOEHE;
+
+  neuenBlockErzeugen();
+}
+
+function spielStarten() {
+  spielInitialisieren();
+  spielLaeuft = true;
+  spielGestartet = true;
+  overlayElement.classList.add('versteckt');
+}
+
+function spielBeenden() {
+  spielLaeuft = false;
+  aktuellerBlock = null;
+
+  highscoreSpeichern();
+  punkteAnzeigeAktualisieren();
+
+  // Overlay mit Ergebnis anzeigen
+  overlayTitelElement.textContent = 'Game Over';
+  overlayTextElement.textContent = 'Tippe, um erneut zu spielen';
+  spielEndBereichElement.classList.remove('versteckt');
+  spielEndPunkteElement.textContent = 'Punkte: ' + punkte;
+  spielEndHighscoreElement.textContent = 'Highscore: ' + highscore;
+  overlayElement.classList.remove('versteckt');
+}
+
+
+// ---------- 5. Zeichnen ----------
+
+function szeneZeichnen() {
+  // Hintergrund löschen
+  ctx.clearRect(0, 0, breiteCanvas, hoeheCanvas);
+
+  // Die "Kamera" verschiebt alles nach unten, während kameraY wächst,
+  // sodass der oberste Block immer etwa im oberen Drittel sichtbar bleibt.
+  const kameraVersatz = hoeheCanvas * 0.65 + kameraY;
+
+  // Alle bereits platzierten Blöcke zeichnen
+  for (let i = 0; i < turm.length; i++) {
+    const block = turm[i];
+    zeichneBlock(block, kameraVersatz);
+  }
+
+  // Den beweglichen Block zeichnen
+  if (aktuellerBlock) {
+    zeichneBlock(aktuellerBlock, kameraVersatz);
+  }
+}
+
+function zeichneBlock(block, kameraVersatz) {
+  const bildschirmY = block.y + kameraVersatz;
+
+  // Blöcke außerhalb des sichtbaren Bereichs nicht zeichnen (Performance)
+  if (bildschirmY < -BLOCK_HOEHE || bildschirmY > hoeheCanvas) return;
+
+  ctx.fillStyle = block.farbe;
+  ctx.fillRect(block.x, bildschirmY, block.breite, BLOCK_HOEHE);
+
+  // Kleiner heller Rand oben für einen leichten 3D-Effekt
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.fillRect(block.x, bildschirmY, block.breite, 4);
+}
+
+
+// ---------- 6. Game Loop ----------
+
+let letzterZeitstempel = null;
+
+function gameLoop(zeitstempel) {
+  if (letzterZeitstempel === null) {
+    letzterZeitstempel = zeitstempel;
+  }
+  const deltaZeit = (zeitstempel - letzterZeitstempel) / 1000; // Sekunden
+  letzterZeitstempel = zeitstempel;
+
+  if (spielLaeuft) {
+    blockBewegen(deltaZeit);
+  }
+
+  szeneZeichnen();
+
+  requestAnimationFrame(gameLoop);
+}
+
+
+// ---------- 7. Eingabe-Handling ----------
+
+function beiTap() {
+  if (!spielGestartet || !spielLaeuft) {
+    // Startbildschirm oder Game-Over-Bildschirm -> neues Spiel beginnen
+    spielStarten();
+  } else {
+    // Während des Spiels -> Block ablegen
+    blockAblegen();
+  }
+}
+
+// Wir nutzen 'pointerdown', das funktioniert einheitlich für Maus, Touch und Stift (iPad)
+canvas.addEventListener('pointerdown', (event) => {
+  event.preventDefault();
+  beiTap();
+});
+
+// Zusätzlich auf dem Overlay selbst, falls der Nutzer dort klickt
+overlayElement.addEventListener('pointerdown', (event) => {
+  event.preventDefault();
+  beiTap();
+});
+
+
+// ---------- Start ----------
+
+highscoreLaden();
+punkteAnzeigeAktualisieren();
+requestAnimationFrame(gameLoop);
+
+</script>
+</body>
+</html>
