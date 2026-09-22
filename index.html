@@ -199,6 +199,11 @@ const BLOCK_HOEHE = 40;          // Höhe jedes Blocks in Pixel
 const START_BREITE = 240;        // Breite des allerersten (Basis-)Blocks
 const PERFEKT_TOLERANZ = 6;      // Wie viele Pixel Abweichung noch als "perfekt" zählt
 
+// Combo-Feature: Wie viele perfekte Treffer in Folge nötig sind, damit die
+// Plattform wächst, und um wie viele Pixel sie dann breiter wird.
+const COMBO_FUER_WACHSTUM = 3;
+const WACHSTUM_BREITE = 30;
+
 let turm = [];            // Liste aller bereits platzierten Blöcke (unten nach oben)
 let aktuellerBlock = null; // Der Block, der sich gerade bewegt
 let kameraY = 0;           // Verschiebung der "Kamera" nach oben, wächst mit dem Turm
@@ -206,9 +211,10 @@ let punkte = 0;
 let highscore = 0;
 let spielLaeuft = false;
 let spielGestartet = false;
+let perfektStreak = 0;    // Zählt aufeinanderfolgende perfekte Treffer
 
 // Geschwindigkeit des sich bewegenden Blocks (Pixel pro Sekunde)
-let basisGeschwindigkeit = 200;
+let basisGeschwindigkeit = 280;
 
 // Farbverlauf: wir wechseln die Blockfarbe langsam mit der Höhe,
 // das sieht ähnlich aus wie im Original.
@@ -248,7 +254,8 @@ function spielInitialisieren() {
   turm = [];
   punkte = 0;
   kameraY = 0;
-  basisGeschwindigkeit = 200;
+  perfektStreak = 0;
+  basisGeschwindigkeit = 280;
 
   // Basis-Block in der Mitte des Bildschirms platzieren
   const basisX = (breiteCanvas - START_BREITE) / 2;
@@ -269,7 +276,7 @@ function neuenBlockErzeugen() {
   const neueY = oberster.y - BLOCK_HOEHE;
 
   // Geschwindigkeit steigt langsam mit der Anzahl der Blöcke (= Höhe des Turms)
-  const geschwindigkeit = basisGeschwindigkeit + turm.length * 4;
+  const geschwindigkeit = basisGeschwindigkeit + turm.length * 6;
 
   // Startrichtung wechselt zufällig, Startposition an einem Rand
   const vonLinks = Math.random() < 0.5;
@@ -328,15 +335,31 @@ function blockAblegen() {
 
   let neuerBlock;
   if (istPerfekt) {
-    // Bonus: Block bleibt in voller Breite erhalten und wird exakt ausgerichtet
+    perfektStreak++;
+
+    // Combo-Feature: Nach X perfekten Treffern in Folge wächst die Plattform,
+    // statt nur gleich zu bleiben. Die zusätzliche Breite wird gleichmäßig
+    // auf beide Seiten verteilt, damit der Turm mittig weiterwächst.
+    let neueBreite = unterster.breite;
+    let neuesX = unterster.x;
+    let istWachstum = false;
+
+    if (perfektStreak > 0 && perfektStreak % COMBO_FUER_WACHSTUM === 0) {
+      neueBreite = unterster.breite + WACHSTUM_BREITE;
+      neuesX = unterster.x - WACHSTUM_BREITE / 2;
+      istWachstum = true;
+    }
+
     neuerBlock = {
-      x: unterster.x,
-      breite: unterster.breite,
+      x: neuesX,
+      breite: neueBreite,
       y: aktuell.y,
       farbe: aktuell.farbe
     };
-    punkte += 2; // Extra-Punkte für perfekten Treffer
+    punkte += istWachstum ? 5 : 2; // Extra-Punkte für perfekten Treffer, noch mehr bei Wachstum
   } else {
+    perfektStreak = 0;
+
     // Normalfall: Block wird auf die Überlappung zugeschnitten
     neuerBlock = {
       x: linkesEnde,
